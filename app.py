@@ -1,23 +1,25 @@
-from flask import Flask, request, jsonify, send_from_directory
+from flask import Flask, request, jsonify
 from flask_cors import CORS
-from werkzeug.utils import secure_filename
+import cloudinary
+import cloudinary.uploader
 import os
 from datetime import datetime
 
 app = Flask(__name__)
 CORS(app)
 
+# Cloudinary Configuration
+cloudinary.config(
+    cloud_name='dr0exmypg',
+    api_key='644955431367616',
+    api_secret='4LactM9w1Z31oIZ5VyPGF33cNA8'
+)
+
 # Configuration
-UPLOAD_FOLDER = 'uploads'
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'webp'}
 MAX_FILE_SIZE = 5 * 1024 * 1024  # 5MB
 
-app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = MAX_FILE_SIZE
-
-# Create uploads directory if it doesn't exist
-if not os.path.exists(UPLOAD_FOLDER):
-    os.makedirs(UPLOAD_FOLDER)
 
 # In-memory database (replace with real database in production)
 products = []
@@ -25,11 +27,6 @@ product_id_counter = 1
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
-
-# Serve uploaded images
-@app.route('/uploads/<filename>')
-def uploaded_file(filename):
-    return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
 
 # API 1: Add Product (from dashboard)
 @app.route('/api/products', methods=['POST'])
@@ -72,11 +69,16 @@ def add_product():
                 'message': 'Name, description, and prix are required'
             }), 400
         
-        # Save image
-        filename = secure_filename(image.filename)
-        unique_filename = f"{datetime.now().timestamp()}_{filename}"
-        image_path = os.path.join(app.config['UPLOAD_FOLDER'], unique_filename)
-        image.save(image_path)
+        # Upload image to Cloudinary
+        upload_result = cloudinary.uploader.upload(
+            image,
+            folder="ecommerce_products",
+            resource_type="image",
+            transformation=[
+                {'width': 800, 'height': 800, 'crop': 'limit'},
+                {'quality': 'auto'}
+            ]
+        )
         
         # Create product object
         product = {
@@ -84,7 +86,8 @@ def add_product():
             'name': name.strip(),
             'description': description.strip(),
             'prix': float(prix),
-            'image': f'/uploads/{unique_filename}',
+            'image': upload_result['secure_url'],
+            'image_public_id': upload_result['public_id'],
             'createdAt': datetime.now().isoformat()
         }
         
@@ -125,8 +128,6 @@ def get_products():
             'error': str(e)
         }), 500
 
-# Bonus APIs for better functionality
-
 # Get single product by ID
 @app.route('/api/products/<int:product_id>', methods=['GET'])
 def get_product(product_id):
@@ -162,10 +163,9 @@ def delete_product(product_id):
                 'message': 'Product not found'
             }), 404
         
-        # Delete image file
-        image_path = os.path.join(os.getcwd(), product['image'].lstrip('/'))
-        if os.path.exists(image_path):
-            os.remove(image_path)
+        # Delete image from Cloudinary
+        if 'image_public_id' in product:
+            cloudinary.uploader.destroy(product['image_public_id'])
         
         products.remove(product)
         
@@ -204,17 +204,23 @@ def update_product(product_id):
         if 'image' in request.files:
             image = request.files['image']
             if image.filename != '' and allowed_file(image.filename):
-                # Delete old image
-                old_image_path = os.path.join(os.getcwd(), product['image'].lstrip('/'))
-                if os.path.exists(old_image_path):
-                    os.remove(old_image_path)
+                # Delete old image from Cloudinary
+                if 'image_public_id' in product:
+                    cloudinary.uploader.destroy(product['image_public_id'])
                 
-                # Save new image
-                filename = secure_filename(image.filename)
-                unique_filename = f"{datetime.now().timestamp()}_{filename}"
-                image_path = os.path.join(app.config['UPLOAD_FOLDER'], unique_filename)
-                image.save(image_path)
-                product['image'] = f'/uploads/{unique_filename}'
+                # Upload new image
+                upload_result = cloudinary.uploader.upload(
+                    image,
+                    folder="ecommerce_products",
+                    resource_type="image",
+                    transformation=[
+                        {'width': 800, 'height': 800, 'crop': 'limit'},
+                        {'quality': 'auto'}
+                    ]
+                )
+                
+                product['image'] = upload_result['secure_url']
+                product['image_public_id'] = upload_result['public_id']
         
         product['updatedAt'] = datetime.now().isoformat()
         
@@ -245,5 +251,5 @@ def too_large(e):
 
 if __name__ == '__main__':
     print("Server is running on http://localhost:5000")
-    print(f"Upload directory: {os.path.join(os.getcwd(), UPLOAD_FOLDER)}")
+    print("Using Cloudinary for image storage")
     app.run(debug=True, port=5000)
